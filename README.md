@@ -1,0 +1,174 @@
+# Gerenciamento de Memória no Antikit-8
+
+Trabalho prático da disciplina de Sistemas Operacionais
+
+O simulador faz o papel do Sistema Operacional do chip embarcado Antikit-8. Ele processa um trace de acessos à memória, trata Page Faults com um algoritmo de substituição baseado em WSClock ou Aging e controla o aquecimento do dispositivo de Swap.
+
+## Especificações do hardware
+
+Os arquivos `hardware/hardware_specs.h` e `hardware/hardware_specs.c` foram fornecidos pelo professor e não são modificados.
+
+| Característica | Valor |
+|---|---|
+| Espaço virtual por processo | 1 MB (1.048.576 bytes) |
+| RAM física | 256 KB |
+| Páginas com VPN par | 4 KB (4096 bytes) |
+| Páginas com VPN ímpar | 8 KB (8192 bytes) |
+| Fading do bit R | A MMU zera o bit R de uma página aleatória a cada 5 acessos globais |
+| Swap térmico | +15 °C por Page Out no mesmo milissegundo virtual; resfria 0,5 °C por ms ocioso |
+| Thermal Throttling | Acima de 65 °C, o custo de 1000 ciclos dobra a cada 5 °C adicionais |
+
+## Estrutura do projeto
+
+```
+.
+├── hardware/
+│   ├── hardware_specs.h     especificação do hardware 
+│   └── hardware_specs.c     motor da MMU e do Swap 
+├── include/
+│   ├── address.h            tradução de endereços virtuais
+│   └── memory.h             RAM física e tabelas de páginas
+├── src/
+│   ├── address.c
+│   └── memory.c
+├── tests/
+│   ├── test_address.c       Teste 1 e validação contra a MMU
+│   └── test_memory.c        alocação, RAM cheia e fragmentação
+└── Makefile
+```
+
+## Como compilar e executar
+
+### Requisitos
+
+- Compilador C com suporte a C99 (gcc)
+- GNU make
+
+**Windows:** instale o [MSYS2](https://www.msys2.org) e, no terminal **MSYS2 UCRT64**, execute:
+
+```bash
+pacman -Syu
+pacman -S --needed mingw-w64-ucrt-x86_64-gcc make
+```
+
+Para usar os comandos no terminal do VS Code ou no PowerShell, adicione `C:\msys64\ucrt64\bin` e `C:\msys64\usr\bin` ao PATH do Windows.
+
+**Linux:** `sudo apt install build-essential`
+
+### Comandos
+
+| Comando | Ação |
+|---|---|
+| `make test` | Compila e executa os testes |
+| `make` | Compila o simulador em `build/simulador` |
+| `make clean` | Remove a pasta `build/` |
+
+Para executar o simulador, coloque o arquivo `memory_trace.txt` na raiz do projeto e rode:
+
+```bash
+./build/simulador
+```
+
+### Saída esperada de `make test`
+
+```
+== Teste 1: limites da paginacao assimetrica ==
+[MMU] VA   12287 -> VPN   1 | Offset 8191 | Pagina de 8 KB (impar)
+[MMU] VA   12288 -> VPN   2 | Offset    0 | Pagina de 4 KB (par)
+[MMU] VA 1048575 -> VPN 170 | Offset 4095 | Pagina de 4 KB (par)
+[MMU] VA 1048576 -> INVALIDO (limite de 1048576 bytes)
+Ultima VPN valida: 170
+
+Varredura exaustiva de 1048576 enderecos concluida.
+Limites de 171 paginas confirmados pela MMU.
+
+APROVADO (0 falhas)
+RAM de 256 KB preenchida com 64 quadros de 4 KB.
+Fragmentacao interna com 1 KB usado: par 75.0% | impar 87.5%
+
+APROVADO (0 falhas)
+```
+
+## Tradução de endereços assimétrica
+
+Uma página par (4 KB) seguida de uma ímpar (8 KB) forma um par de 12 KB. A VPN e o offset são obtidos em tempo constante:
+
+```
+par       = endereço / 12288
+resto     = endereço % 12288
+VPN       = 2 × par + (resto ≥ 4096 ? 1 : 0)
+offset    = resto ≥ 4096 ? resto − 4096 : resto
+```
+
+1 MB contém 85 pares completos (1.044.480 bytes) e uma página par final de 4 KB. O sistema tem, portanto, **171 páginas (VPN 0 a 170)**, e o último byte do espaço virtual fica dentro da VPN 170, sem estouro.
+
+| Endereço | VPN | Offset | Observação |
+|---|---|---|---|
+| 12287 | 1 | 8191 | Último byte da página de 8 KB |
+| 12288 | 2 | 0 | Primeiro byte da página de 4 KB |
+| 1048575 | 170 | 4095 | Último byte de 1 MB |
+| 1048576 | — | — | Rejeitado como inválido |
+
+Endereços fora de 1 MB são recusados antes de chegar à MMU, para não serem contados como Page Fault.
+
+## Organização da RAM física
+
+A RAM de 256 KB é dividida em **64 quadros de 4 KB**:
+
+- Uma página par ocupa 1 quadro.
+- Uma página ímpar ocupa 2 quadros consecutivos, começando em um quadro de índice par.
+- O campo `frame_number` da PTE guarda o quadro inicial, e o endereço físico é `frame_number × 4096 + offset`.
+- Ao alocar uma página par, o sistema dá preferência a quadros cujo vizinho já está ocupado, para manter pares livres disponíveis para as páginas ímpares.
+- Cada processo tem sua própria tabela com 171 entradas, criada no primeiro acesso do PID e liberada ao final da execução.
+
+### Fragmentação interna
+
+Cada página registra o maior offset acessado, o que mostra quantos bytes estão realmente em uso. O restante da página é desperdício interno:
+
+| Página | Tamanho | Bytes usados | Desperdício |
+|---|---|---|---|
+| Par | 4 KB | 1 KB | 75,0% |
+| Ímpar | 8 KB | 1 KB | 87,5% |
+
+## Interface dos módulos
+
+| Função | Descrição |
+|---|---|
+| `addr_translate` | Decompõe um endereço virtual em VPN, offset e tamanho de página |
+| `addr_physical` | Calcula o endereço físico a partir da PTE |
+| `memory_get_process` | Retorna a tabela de páginas do processo, criando-a se necessário |
+| `memory_access` | Traduz e consulta a MMU, retornando `ACCESS_HIT`, `ACCESS_FAULT` ou `ACCESS_INVALID` |
+| `memory_load_page` | Carrega a página em quadros livres ou retorna `NO_FRAME` se a RAM estiver cheia |
+| `memory_unmap_page` | Remove a página da RAM e informa se ela estava suja (exige Page Out) |
+| `memory_would_fit` | Indica se despejar uma vítima abre espaço para a página desejada |
+| `memory_frame_usage` | Informa bytes usados e desperdiçados em um quadro |
+| `memory_check_consistency` | Verifica a correspondência entre PTEs e quadros físicos |
+
+## Divisão do trabalho
+
+| Integrante | Papel | Responsabilidades |
+|---|---|---|
+| 1 | Arquiteto da MMU | Tradução de endereços virtuais (VPN e offset assimétricos) e estruturas de dados da RAM |
+| 2 | Engenheiro de Algoritmos | Algoritmo de substituição (WSClock/Aging) e controle térmico do Swap |
+| 3 | Auditor e Analista de Métricas | Parser do trace, auditoria por checksum, mapa ASCII de fragmentação e estatísticas finais |
+
+## Testes
+
+| Teste | Objetivo | Onde |
+|---|---|---|
+| 1 | Validação da tradução assimétrica nos limites das páginas | `tests/test_address.c` |
+| 2 | Estresse térmico do Swap com RAM cheia no timestamp 200 | Trace de memória |
+| 3 | Auditoria do checksum após o fading do bit R | Log do simulador |
+| 4 | Mapa ASCII de fragmentação a cada 10 linhas do trace | Log do simulador |
+
+`tests/test_address.c` também compara a tradução com uma soma acumulada em todos os 1.048.576 endereços e confirma, para cada limite de página, que `mmu_access_memory()` reconhece a mesma VPN. `tests/test_memory.c` cobre alocação, despejo, preenchimento total da RAM, fragmentação interna e gerenciamento de processos.
+
+## Saída do simulador
+
+Ao fim do processamento do trace, o simulador exibe:
+
+- Total de acessos à memória
+- Total de Page Faults (por processo e global)
+- Temperatura máxima alcançada pelo Swap
+- Ciclos de clock gastos em operações de E/S
+- Porcentagem média de fragmentação interna da RAM
