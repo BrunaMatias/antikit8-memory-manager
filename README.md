@@ -27,13 +27,22 @@ Os arquivos `hardware/hardware_specs.h` e `hardware/hardware_specs.c` foram forn
 │   └── hardware_specs.c     motor da MMU e do Swap 
 ├── include/
 │   ├── address.h            tradução de endereços virtuais
-│   └── memory.h             RAM física e tabelas de páginas
+│   ├── memory.h             RAM física e tabelas de páginas
+│   ├── replacement.h        WSClock adaptado e eventos para auditoria
+│   └── swap.h               escalonamento térmico do Swap
 ├── src/
 │   ├── address.c
-│   └── memory.c
+│   ├── memory.c
+│   ├── replacement.c
+│   └── swap.c
 ├── tests/
 │   ├── test_address.c       Teste 1 e validação contra a MMU
-│   └── test_memory.c        alocação, RAM cheia e fragmentação
+│   ├── test_memory.c        alocação, RAM cheia e fragmentação
+│   ├── test_replacement.c   seleção de vítimas, integração e fading
+│   ├── test_swap.c          temperatura, ciclos e limites do relógio
+│   └── test_thermal.c       Teste 2 e comparação de estratégias
+├── docs/
+│   └── integrante2.md       funcionamento, resultados e integração
 └── Makefile
 ```
 
@@ -60,10 +69,11 @@ Para usar os comandos no terminal do VS Code ou no PowerShell, adicione `C:\msys
 | Comando | Ação |
 |---|---|
 | `make test` | Compila e executa os testes |
-| `make` | Compila o simulador em `build/simulador` |
+| `make` | Compila os módulos em `build/libantikit8.a`; quando existir `src/main.c`, compila `build/simulador` |
+| `make thermal` | Executa o estresse térmico e salva `build/thermal_results.csv` |
 | `make clean` | Remove a pasta `build/` |
 
-Para executar o simulador, coloque o arquivo `memory_trace.txt` na raiz do projeto e rode:
+O programa principal e o parser são responsabilidade do integrante 3 e ainda não estão presentes nesta versão. Os módulos dos integrantes 1 e 2 já podem ser compilados e testados. Depois que o grupo adicionar `src/main.c`, coloque o arquivo `memory_trace.txt` na raiz do projeto e rode:
 
 ```bash
 ./build/simulador
@@ -143,6 +153,20 @@ Cada página registra o maior offset acessado, o que mostra quantos bytes estão
 | `memory_would_fit` | Indica se despejar uma vítima abre espaço para a página desejada |
 | `memory_frame_usage` | Informa bytes usados e desperdiçados em um quadro |
 | `memory_check_consistency` | Verifica a correspondência entre PTEs e quadros físicos |
+| `replacement_init` | Inicializa o ponteiro do WSClock e a janela de idade `tau` |
+| `replacement_handle_fault` | Seleciona vítimas, grava as sujas e conclui o acesso que falhou |
+| `replacement_set_observer` | Registra o callback do auditor para alterações feitas pelo WSClock |
+| `swap_advance_to` | Avança o relógio efetivo, preservando esperas virtuais anteriores |
+| `swap_page_out` | Aciona o hardware e espera em tempo virtual quando necessário |
+| `swap_current_temperature` | Consulta a temperatura considerando o resfriamento pendente |
+
+## WSClock e controle térmico — integrante 2
+
+O WSClock usa os bits `referenced` e `modified` e o campo `last_access_t` da própria tabela usada pela MMU. A janela de idade padrão é de 50 ms, configurável por `replacement_init`. A busca circular dá segunda chance às páginas referenciadas e prefere páginas limpas para evitar E/S. Se uma página de 8 KB exigir duas vítimas de 4 KB, escolhe um par alinhado e grava cada vítima suja separadamente.
+
+Quando uma escrita ultrapassaria a meta de 64 °C, o SO adia a operação no relógio virtual. O hardware original aplica o resfriamento e cobra os ciclos de E/S; seus arquivos permanecem intactos. O tempo de espera é registrado separadamente, sem inventar uma frequência de CPU para convertê-lo em ciclos.
+
+O comando `make thermal` enche os 256 KB de RAM e provoca dez novas faltas com timestamp de entrada 200. Compara uma referência ineficiente com o WSClock em rajadas de leitura e de escrita, gerando os dados para o relatório. A implementação, as limitações da estratégia e o trecho de integração com o futuro `main` estão em [docs/integrante2.md](docs/integrante2.md).
 
 ## Divisão do trabalho
 
@@ -157,11 +181,13 @@ Cada página registra o maior offset acessado, o que mostra quantos bytes estão
 | Teste | Objetivo | Onde |
 |---|---|---|
 | 1 | Validação da tradução assimétrica nos limites das páginas | `tests/test_address.c` |
-| 2 | Estresse térmico do Swap com RAM cheia no timestamp 200 | Trace de memória |
+| 2 | Estresse térmico do Swap com RAM cheia no timestamp 200 | `tests/test_thermal.c` e `make thermal` |
 | 3 | Auditoria do checksum após o fading do bit R | Log do simulador |
 | 4 | Mapa ASCII de fragmentação a cada 10 linhas do trace | Log do simulador |
 
 `tests/test_address.c` também compara a tradução com uma soma acumulada em todos os 1.048.576 endereços e confirma, para cada limite de página, que `mmu_access_memory()` reconhece a mesma VPN. `tests/test_memory.c` cobre alocação, despejo, preenchimento total da RAM, fragmentação interna e gerenciamento de processos.
+
+`tests/test_replacement.c` cobre páginas limpas e sujas, segunda chance, fading, pares alinhados, erros e 5.000 acessos entre cinco processos, verificando a consistência da RAM após cada operação. `tests/test_swap.c` verifica o pico térmico, o resfriamento sem duplicação, a separação dos ciclos de MMU/E/S e o limite de timestamps.
 
 ## Saída do simulador
 
