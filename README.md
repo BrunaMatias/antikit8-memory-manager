@@ -34,7 +34,8 @@ Os arquivos `hardware/hardware_specs.h` e `hardware/hardware_specs.c` foram forn
 │   ├── address.c
 │   ├── memory.c
 │   ├── replacement.c
-│   └── swap.c
+│   ├── swap.c
+│   └── main.c                parser, auditoria, mapa e estatísticas
 ├── tests/
 │   ├── test_address.c       Teste 1 e validação contra a MMU
 │   ├── test_memory.c        alocação, RAM cheia e fragmentação
@@ -42,7 +43,9 @@ Os arquivos `hardware/hardware_specs.h` e `hardware/hardware_specs.c` foram forn
 │   ├── test_swap.c          temperatura, ciclos e limites do relógio
 │   └── test_thermal.c       Teste 2 e comparação de estratégias
 ├── docs/
-│   └── integrante2.md       funcionamento, resultados e integração
+│   ├── integrante1.md       MMU e gerenciamento da RAM
+│   ├── integrante2.md       WSClock e Swap térmico
+│   └── integrante3.md       parser, auditoria e métricas
 └── Makefile
 ```
 
@@ -73,11 +76,22 @@ Para usar os comandos no terminal do VS Code ou no PowerShell, adicione `C:\msys
 | `make thermal` | Executa o estresse térmico e salva `build/thermal_results.csv` |
 | `make clean` | Remove a pasta `build/` |
 
-O programa principal e o parser são responsabilidade do integrante 3 e ainda não estão presentes nesta versão. Os módulos dos integrantes 1 e 2 já podem ser compilados e testados. Depois que o grupo adicionar `src/main.c`, coloque o arquivo `memory_trace.txt` na raiz do projeto e rode:
+O programa principal procura `memory_trace.txt` na raiz por padrão. Também é possível informar outro caminho:
 
 ```bash
-./build/simulador
+./build/simulador [arquivo_trace]
 ```
+
+Cada registro não comentado do trace usa quatro campos: `timestamp_ms pid endereco R|W`. Timestamp e PID são decimais; o endereço pode ser decimal ou hexadecimal com prefixo `0x`. Linhas vazias e comentários iniciados por `#` são ignorados. Exemplo:
+
+```text
+# tempo PID endereco operacao
+0 1 12287 R
+1 1 0x3000 W
+200 2 1048575 R
+```
+
+O programa gera logs de auditoria e de substituição, mostra o mapa de RAM a cada dez registros e termina com as métricas globais e por processo.
 
 ### Saída esperada de `make test`
 
